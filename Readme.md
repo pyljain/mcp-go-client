@@ -9,32 +9,63 @@ This repository provides a Go-based client library for the [Model Context Protoc
 
 ## Overview
 
-MCP aims to solve the “data silo” problem for AI by standardizing how models and data sources communicate. Rather than writing bespoke connectors for every tool, you can build once against MCP and then reuse that connection for many data sources.
-After that, you instantiate the client, connect, and call tools to exchange data.
+The MCP Client provides a way to interact with AI models using the Model Context Protocol. It supports:
+- Tool discovery and listing
+- Tool execution with arguments
+- Server-Sent Events (SSE) based communication
+- JSON-RPC 2.0 message format
 
-## Prerequisites
+## Architecture
 
-- Go 1.21+ (or a more recent version).
-- An MCP server to connect to (either local or remote).
-- Network connectivity to the MCP server, if you are using SSE or another network-based transport.
+The client is built with a modular architecture consisting of:
 
-## Installation
+- **Transport Layer**: Handles the communication protocol (currently SSE)
+- **Client Core**: Manages the MCP protocol implementation
+- **Message Handling**: JSON-RPC 2.0 message serialization/deserialization
 
-Install the client package in your Go project:
+## Sequence Flow
 
-```bash
-git clone [repository-url]
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Transport
+    participant Server
+
+    Client->>Transport: Initialize SSE Connection
+    Transport->>Server: HTTP GET /events
+    Server-->>Transport: SSE Connection Established
+    Transport-->>Client: Connection Ready
+
+    Client->>Transport: Send Initialize Request
+    Transport->>Server: POST /initialize
+    Server-->>Transport: Initialize Response
+    Transport-->>Client: Initialize Confirmation
+
+    Client->>Transport: Send ListTools Request
+    Transport->>Server: POST /tools/list
+    Server-->>Transport: Tools List Response
+    Transport-->>Client: Available Tools
+
+    Client->>Transport: Send Tool Call Request
+    Transport->>Server: POST /tools/call
+    Server-->>Transport: Tool Call Response
+    Transport-->>Client: Tool Execution Result
 ```
 
-## Usage
+## Getting Started
 
-Below is a simple example that demonstrates how to:
+### Prerequisites
 
-1. Create a transport (SSE in this case).
-2. Instantiate an MCP client.
-3. Connect the client to the MCP server.
-4. List available tools.
-5. Call a tool and handle the response.
+- Go 1.16 or higher
+- Access to an MCP-compatible server
+
+### Installation
+
+```bash
+go get github.com/yourusername/mcp_client
+```
+
+### Usage
 
 ```go
 package main
@@ -46,67 +77,126 @@ import (
 )
 
 func main() {
-    // 1. Create transport (SSE example)
+    // Initialize transport with server URL and auth headers
     transport := transport.NewSSETransport("http://localhost:8777", map[string]string{
-        "Authorization": "Bearer abcd",
+        "Authorization": "Bearer your-token",
     })
 
-    // 2. Instantiate an MCP client
-    client := mcp.NewClient("spark", "1.0.0")
+    // Create new MCP client
+    client := mcp.NewClient("your-client", "1.0.0")
 
-    // 3. Connect to the MCP server
+    // Connect to server
     err := client.Connect(transport)
     if err != nil {
         log.Fatal(err)
     }
 
-    // 4. List available tools
+    // List available tools
     tools, err := client.ListTools()
     if err != nil {
         log.Fatal(err)
     }
-    log.Printf("Tools: %+v", tools)
 
-    // 5. Call a tool and process its response
-    res, err := client.CallTool("query", map[string]interface{}{
-        "query": "SELECT * FROM employees",
+    // Call a specific tool
+    res, err := client.CallTool("tool-name", map[string]interface{}{
+        "param1": "value1",
+        "param2": "value2",
     })
     if err != nil {
         log.Fatal(err)
     }
-    log.Printf("Response: %s", *res[0].Text)
 }
 ```
 
-### Choosing a Transport
+## Protocol Details
 
-- **SSE Transport** (`NewSSETransport`): Communicates over HTTP using Server-Sent Events (SSE). Useful when the MCP server is hosted remotely, and you want to stream data or logs over a persistent HTTP connection.
-- **Stdio Transport** TBD
+### Message Format
 
-### Authentication
+The client uses JSON-RPC 2.0 for message exchange:
 
-If your MCP server requires authentication, you can pass the relevant tokens or credentials in the transport configuration. In the example above, an HTTP Authorization header is set to `Bearer abcd`. Adapt that as needed for your environment.
+```json
+// Request
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+        "name": "tool-name",
+        "arguments": {
+            "param1": "value1"
+        }
+    }
+}
 
-## Project Structure
-
-Typical structure might look like:
-
+// Response
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "content": [
+            {
+                "type": "text",
+                "text": "response text"
+            }
+        ]
+    }
+}
 ```
-.
-├── pkg
-│   ├── mcp
-│   │   ├── client.go        // MCP client logic
-│   │   └── ...
-│   └── transport
-│       ├── sse_transport.go // SSE transport implementation
-│       ├── stdio.go         // STDIO transport (if implemented)
-│       └── ...
-├── cmd
-│   └── sample_client
-│       └── main.go          // Example usage
-└── ...
-```
+
+### Transport
+
+The client uses Server-Sent Events (SSE) for real-time communication:
+- Establishes a persistent connection to the server
+- Handles message streaming and reconnection
+- Supports authentication through headers
+
+### Authentication and Authorization
+
+The MCP client supports authentication through HTTP headers. Here's how it works:
+
+1. **Bearer Token Authentication**
+   ```go
+   transport := transport.NewSSETransport("http://localhost:8777", map[string]string{
+       "Authorization": "Bearer abcd",  // Bearer token for authentication
+   })
+   ```
+   The client sends the token in the `Authorization` header for both SSE connection and subsequent API calls.
+
+2. **Header-based Authentication**
+   You can add any custom headers required by your MCP server:
+   ```go
+   transport := transport.NewSSETransport("http://localhost:8777", map[string]string{
+       "Authorization": "Bearer abcd",
+       "X-Custom-Header": "custom-value",
+       "X-API-Key": "your-api-key",
+   })
+   ```
+   You will see the companion MCP Go Server validates the token being passed, in this case a synthetic value of 'abcd'. Review the [MCP Server Code](https://github.com/pyljain/mcp_server_go/blob/main/main.go#L16)
+
+3. **Security Considerations**
+   - Always use HTTPS for production environments
+   - Store sensitive tokens securely (e.g., environment variables)
+   - Rotate tokens regularly
+   - Use the principle of least privilege for token permissions
+
+4. **Error Handling**
+   The client will return appropriate errors for authentication failures:
+   - Invalid or expired tokens
+   - Missing authentication headers
+   - Unauthorized access attempts
+
+## Error Handling
+
+The client provides comprehensive error handling for:
+- Connection failures
+- Protocol errors
+- Tool execution errors
+- Message parsing errors
 
 ## Contributing
 
-Contributions are welcome! Feel free to open issues or PRs if you have improvements to suggest, bug fixes, or new features to add. Whether it’s fixing documentation, improving the client’s interface, or proposing new transports, all feedback is appreciated.
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
