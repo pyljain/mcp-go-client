@@ -62,7 +62,7 @@ sequenceDiagram
 ### Installation
 
 ```bash
-go get github.com/yourusername/mcp_client
+git clone https://github.com/pyljain/mcp-go-client
 ```
 
 ### Usage
